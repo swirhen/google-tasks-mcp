@@ -1,4 +1,4 @@
-import { openKv } from "@deno/kv";
+import { getKv, type Kv } from "../utils/kv.ts";
 import { encrypt, decrypt } from "../utils/encryption.ts";
 
 export interface TokenData {
@@ -14,10 +14,10 @@ interface EncryptedTokenData {
 }
 
 class TokenStore {
-  private kv: Awaited<ReturnType<typeof openKv>> | null = null;
+  private kv: Kv | null = null;
 
   async init() {
-    this.kv = await openKv();
+    this.kv = await getKv();
   }
 
   async storeTokens(mcpToken: string, tokenData: TokenData): Promise<void> {

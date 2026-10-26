@@ -1,10 +1,10 @@
-import { openKv } from "@deno/kv";
+import { getKv, type Kv } from "../utils/kv.ts";
 import { Context, Next } from "hono";
 
-let kv: Awaited<ReturnType<typeof openKv>> | null = null;
+let kv: Kv | null = null;
 
 export async function initRateLimiter() {
-  kv = await openKv();
+  kv = await getKv();
 }
 
 interface RateLimitConfig {

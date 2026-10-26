@@ -2,9 +2,10 @@ import { Buffer } from "node:buffer";
 import { Hono } from "hono";
 import { tokenStore } from "./token-store.ts";
 import crypto from "node:crypto";
-import { openKv } from "@deno/kv";
+import { getKv, type Kv } from "../utils/kv.ts";
 import { createLogger } from "../utils/logger.ts";
 import { rateLimit } from "../server/rate-limiter.ts";
+import { isAllowedRedirectUri } from "../config.ts";
 
 const logger = createLogger({ component: "oauth" });
 
@@ -39,10 +40,10 @@ interface RegisteredClient {
 }
 
 class OAuthStore {
-  private kv: Awaited<ReturnType<typeof openKv>> | null = null;
+  private kv: Kv | null = null;
 
   async init() {
-    this.kv = await openKv();
+    this.kv = await getKv();
   }
 
   async storeSession(sessionId: string, session: OAuthSession): Promise<void> {
@@ -116,6 +117,12 @@ export function createOAuthRouter(config: OAuthConfig) {
       const body = await c.req.json();
       const clientId = crypto.randomUUID();
 
+      const requestedUris: unknown[] = Array.isArray(body.redirect_uris) ? body.redirect_uris : [];
+      if (!requestedUris.every((u) => typeof u === "string" && isAllowedRedirectUri(u))) {
+        logger.warn("OAuth client registration rejected: redirect_uri not allowed");
+        return c.json({ error: "invalid_redirect_uri" }, 400);
+      }
+
       await oauthStore.registerClient(clientId, {
         clientId,
         redirectUris: body.redirect_uris || [],
@@ -149,6 +156,12 @@ export function createOAuthRouter(config: OAuthConfig) {
     if (!redirectUri) {
       logger.warn("OAuth authorization failed: missing redirect_uri");
       return c.json({ error: "invalid_request", error_description: "redirect_uri is required" }, 400);
+    }
+
+    // 任意の redirect_uri を受け付けると、罠のリンク経由で認可コードを第三者に渡してしまうため許可リストで絞る
+    if (!isAllowedRedirectUri(redirectUri)) {
+      logger.warn("OAuth authorization failed: redirect_uri not allowed");
+      return c.json({ error: "invalid_request", error_description: "redirect_uri is not allowed" }, 400);
     }
 
     if (!state) {

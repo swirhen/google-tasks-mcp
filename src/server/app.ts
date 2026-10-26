@@ -1,10 +1,11 @@
 import process from "node:process";
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
 import { readFile } from "node:fs/promises";
 import { createOAuthRouter } from "../auth/oauth.ts";
 import { authenticateBearer } from "./middleware.ts";
 import { handleMcpGet, handleMcpPost } from "./mcp-endpoints.ts";
+import { getPublicBaseUrl } from "../config.ts";
 
 export interface ServerConfig {
   oauthConfig: {
@@ -82,8 +83,21 @@ export function createApp(config: ServerConfig) {
   app.get(MCP_ENDPOINT, authenticateBearer, handleMcpGet);
   app.post(MCP_ENDPOINT, authenticateBearer, handleMcpPost);
 
+  // MCP クライアントは /.well-known/oauth-protected-resource[/mcp] から認可サーバーを探す
+  const protectedResourceMetadata = (c: Context) => {
+    const baseUrl = getPublicBaseUrl(c.req.url);
+    return c.json({
+      resource: `${baseUrl}${MCP_ENDPOINT}`,
+      authorization_servers: [baseUrl],
+      bearer_methods_supported: ["header"],
+      scopes_supported: [],
+    });
+  };
+  app.get("/.well-known/oauth-protected-resource", protectedResourceMetadata);
+  app.get(`/.well-known/oauth-protected-resource${MCP_ENDPOINT}`, protectedResourceMetadata);
+
   app.get("/.well-known/oauth-authorization-server", (c) => {
-    const baseUrl = new URL(c.req.url).origin;
+    const baseUrl = getPublicBaseUrl(c.req.url);
     return c.json({
       issuer: baseUrl,
       authorization_endpoint: `${baseUrl}/authorize`,

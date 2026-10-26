@@ -1,0 +1,25 @@
+[Unit]
+Description=Google Tasks MCP server (claude.ai custom connector)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=swirhen
+Group=swirhen
+WorkingDirectory=/home/swirhen/google-tasks-mcp
+# GOOGLE_CLIENT_SECRET・ENCRYPTION_SECRET などはここに書く（root 所有・600）
+EnvironmentFile=/etc/default/google-tasks-mcp
+Environment=HOST=127.0.0.1
+Environment=PORT=8005
+Environment=PUBLIC_BASE_URL=https://swirhen.tv/google_tasks_mcp
+Environment=GOOGLE_REDIRECT_URI=https://swirhen.tv/google_tasks_mcp/callback
+Environment=ALLOWED_REDIRECT_URIS=https://claude.ai/api/mcp/auth_callback
+# 接続情報（暗号化済みトークン）を再起動後も残す
+Environment=KV_PATH=/home/swirhen/.local/share/google-tasks-mcp/kv.sqlite3
+ExecStart=/usr/bin/node /home/swirhen/google-tasks-mcp/build/serve.js
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
