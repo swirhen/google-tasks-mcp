@@ -103,6 +103,17 @@ function sha256(buffer: string): Buffer {
   return crypto.createHash('sha256').update(buffer).digest();
 }
 
+// 許可リストに足す URI を調べられるよう、弾いた redirect_uri はクエリを除いてログに出す
+function describeRedirectUri(uri: unknown): string {
+  if (typeof uri !== "string") return String(typeof uri);
+  try {
+    const url = new URL(uri);
+    return `${url.origin}${url.pathname}`;
+  } catch {
+    return "(invalid URL)";
+  }
+}
+
 export async function initOAuthStore() {
   await oauthStore.init();
 }
@@ -119,7 +130,9 @@ export function createOAuthRouter(config: OAuthConfig) {
 
       const requestedUris: unknown[] = Array.isArray(body.redirect_uris) ? body.redirect_uris : [];
       if (!requestedUris.every((u) => typeof u === "string" && isAllowedRedirectUri(u))) {
-        logger.warn("OAuth client registration rejected: redirect_uri not allowed");
+        logger.warn("OAuth client registration rejected: redirect_uri not allowed", {
+          redirectUris: requestedUris.map(describeRedirectUri),
+        });
         return c.json({ error: "invalid_redirect_uri" }, 400);
       }
 
@@ -160,7 +173,9 @@ export function createOAuthRouter(config: OAuthConfig) {
 
     // 任意の redirect_uri を受け付けると、罠のリンク経由で認可コードを第三者に渡してしまうため許可リストで絞る
     if (!isAllowedRedirectUri(redirectUri)) {
-      logger.warn("OAuth authorization failed: redirect_uri not allowed");
+      logger.warn("OAuth authorization failed: redirect_uri not allowed", {
+        redirectUri: describeRedirectUri(redirectUri),
+      });
       return c.json({ error: "invalid_request", error_description: "redirect_uri is not allowed" }, 400);
     }
 
