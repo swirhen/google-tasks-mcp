@@ -1,160 +1,169 @@
-# SETUP: Connecting the Google Tasks MCP Server to the Claude App
+# SETUP：Google Tasks MCP サーバーを Claude アプリにつなぐ
 
-This runbook covers everything needed to deploy this server to Deno Deploy and connect it to the Claude app (claude.ai) as a custom connector.
+この手順書では、このサーバーを Deno Deploy にデプロイし、Claude アプリ（claude.ai）にカスタムコネクタとしてつなぐまでを説明します。
 
-It is written for a single user (personal) deployment. Where a step requires your own Google or Deno login, it is called out explicitly.
+個人で使う（ユーザーが 1 人の）デプロイを想定しています。自分の Google や Deno のアカウントでログインが必要な手順は、その旨をはっきり書いています。
 
-The MCP server is remote, served over HTTP plus SSE at the /mcp endpoint with bearer auth. It implements OAuth discovery at /.well-known/oauth-authorization-server, an authorization endpoint at /authorize, and a callback at /callback. The OAuth scope used is https://www.googleapis.com/auth/tasks.
+> **このフォークについて**：この手順書は upstream の Deno Deploy 向けの内容を訳したものです。このフォークでは、自前のサーバー（Node + systemd + Apache のサブパス配下）でも動かせます。その場合は、手順 4 の代わりに README の「このフォークについて」と環境変数一覧に従ってください。どちらの場合も、`ALLOWED_REDIRECT_URIS` にクライアントのコールバック URL（claude.ai なら `https://claude.ai/api/mcp/auth_callback`）を入れる必要があります。
 
-## Overview of what you will do
+この MCP サーバーはリモート型で、`/mcp` エンドポイントで HTTP と SSE を使って通信し、Bearer 認証をかけています。OAuth のディスカバリーを `/.well-known/oauth-authorization-server` に、認可エンドポイントを `/authorize` に、コールバックを `/callback` に持っています。使う OAuth スコープは `https://www.googleapis.com/auth/tasks` です。
 
-1. Enable the Google Tasks API in Google Cloud Console.
-2. Configure the OAuth consent screen (External), add yourself as a test user, and add the tasks scope.
-3. Create a Web application OAuth client and set its authorized redirect URI.
-4. Deploy this repo to Deno Deploy and set the environment variables.
-5. Update the Google OAuth client redirect URI to your live domain.
-6. Add the custom connector in the Claude app and authorize it.
+## 作業の流れ
 
-Throughout this document, replace YOUR_DEPLOYED_DOMAIN with your actual Deno Deploy domain (for example, google-tasks-mcp.deno.dev).
+1. Google Cloud Console で Google Tasks API を有効にする。
+2. OAuth 同意画面を「外部」で設定し、自分をテストユーザーに加えて、tasks スコープを追加する。
+3. ウェブアプリケーションの OAuth クライアントを作り、承認済みのリダイレクト URI を設定する。
+4. このリポジトリを Deno Deploy にデプロイし、環境変数を設定する。
+5. Google の OAuth クライアントのリダイレクト URI を、本番のドメインに合わせる。
+6. Claude アプリでカスタムコネクタを追加し、許可する。
 
-## Prerequisites
+この手順書の YOUR_DEPLOYED_DOMAIN は、実際の Deno Deploy のドメイン（例：google-tasks-mcp.deno.dev）に読み替えてください。
 
-A Google account that has Google Tasks. A Deno Deploy account (sign in with GitHub at https://dash.deno.com). The forked repository connected to Deno Deploy, or the Deno CLI installed locally if you prefer deploying with deployctl.
+## 必要なもの
 
-## Step 1: Enable the Google Tasks API
+- Google Tasks を使っている Google アカウント
+- Deno Deploy のアカウント（https://dash.deno.com に GitHub でログイン）
+- Deno Deploy につないだ fork のリポジトリ。deployctl でデプロイしたい場合は、ローカルに Deno CLI
 
-1. Go to the Google Cloud Console: https://console.cloud.google.com
-2. Create a new project (or select an existing one). A simple name like "google-tasks-mcp" is fine.
-3. In the left navigation, open APIs and Services, then Library.
-4. Search for "Google Tasks API" and open it.
-5. Click Enable.
+## 手順 1：Google Tasks API を有効にする
 
-## Step 2: Configure the OAuth consent screen
+1. Google Cloud Console（https://console.cloud.google.com）を開きます。
+2. プロジェクトを新しく作るか、既存のものを選びます。名前は「google-tasks-mcp」のような簡単なもので十分です。
+3. 左のメニューで「API とサービス」→「ライブラリ」を開きます。
+4. 「Google Tasks API」を検索して開きます。
+5. 「有効にする」を押します。
 
-1. In APIs and Services, open OAuth consent screen.
-2. Choose User Type: External. (External is required because this is not a Google Workspace internal app; it still works for personal single-user use.)
-3. Click Create, then fill in the required fields:
-   - App name: Google Tasks MCP (or any name you prefer).
-   - User support email: your email.
-   - Developer contact email: your email.
-4. On the Scopes step, click Add or Remove Scopes, then add this scope: https://www.googleapis.com/auth/tasks
-   (If it is not in the filtered list, paste it into the "Manually add scopes" box, click Add to Table, then Update.)
-5. On the Test users step, click Add Users and add the Google account you will use with Claude. This must be the same account you authorize later.
-6. Save and continue to the summary.
+## 手順 2：OAuth 同意画面を設定する
 
-### GOTCHA: the 7 day refresh token expiry in testing mode (read this)
+1. 「API とサービス」で「OAuth 同意画面」を開きます。
+2. ユーザーの種類は「外部」を選びます。Google Workspace の組織内アプリではないので、「外部」にする必要があります。個人で 1 人で使う場合も、これで動きます。
+3. 「作成」を押し、必須の項目を入力します。
+   - アプリ名：Google Tasks MCP（好きな名前でかまいません）
+   - ユーザー サポートメール：自分のメールアドレス
+   - デベロッパーの連絡先メール：自分のメールアドレス
+4. スコープの画面で「スコープを追加または削除」を押し、`https://www.googleapis.com/auth/tasks` を追加します。
+   一覧に見つからなければ、「スコープの手動追加」欄に貼り付けて「テーブルに追加」を押し、「更新」を押します。
+5. テストユーザーの画面で「ユーザーを追加」を押し、Claude で使う Google アカウントを追加します。あとで許可するときに使うアカウントと同じものにしてください。
+6. 保存して、概要の画面まで進みます。
 
-While the OAuth consent screen is left in "Testing" publishing status, Google expires the refresh token after 7 days. That forces you to re-authorize the connector roughly once a week, which is annoying for a personal always-on connector.
+> 今の Google Cloud Console では、OAuth 同意画面が「Google Auth Platform」にまとめられています。スコープは「データアクセス」で、公開ステータスとテストユーザーは「対象」で設定します。
 
-Recommendation for single-user personal use: publish the consent screen to production to avoid the weekly re-auth.
+### 注意：テストモードでは refresh token が 7 日で切れる（必ず読んでください）
 
-To do this, go to APIs and Services, OAuth consent screen, and click Publish App (move publishing status from Testing to In production). For a single sensitive scope like Google Tasks used only by you, Google typically does not require full verification for the app to function, although the consent screen may show an "unverified app" warning that you can click through (Advanced, then "Go to App"). Verification is generally only mandatory if you intend to distribute the app to many external users. Since this is your own personal connector, publishing to production removes the 7 day token expiry without needing a formal verification review for personal use.
+OAuth 同意画面の公開ステータスが「テスト」のままだと、Google は refresh token を 7 日で失効させます。そのため、だいたい週に 1 回コネクタを許可し直すことになります。常時つないでおく個人用のコネクタとしては面倒です。
 
-If you would rather not publish, you can leave it in Testing, but expect to click Connect again in Claude about every 7 days.
+個人で 1 人で使うなら、同意画面を本番環境に公開して、毎週の再認可をなくすことをおすすめします。
 
-## Step 3: Create the Web application OAuth client
+公開するには、「API とサービス」→「OAuth 同意画面」を開き、「アプリを公開」を押します（公開ステータスを「テスト」から「本番環境」に変えます）。Google Tasks のような機密スコープ 1 つを自分だけで使う場合、アプリを動かすだけなら、通常は Google の本格的な審査は求められません。ただし同意画面に「未確認のアプリ」という警告が出ます。「詳細」→「（アプリ名）に移動」で進めます。審査が必須になるのは、たいてい多くの外部ユーザーにアプリを配る場合だけです。自分専用のコネクタなら、正式な審査を受けなくても、本番環境に公開すれば 7 日の期限はなくなります。
 
-1. In APIs and Services, open Credentials.
-2. Click Create Credentials, then OAuth client ID.
-3. Application type: Web application.
-4. Name: google-tasks-mcp web client (or any name).
-5. Under Authorized redirect URIs, click Add URI and enter:
+公開したくない場合は「テスト」のままでもかまいません。ただし、約 7 日ごとに Claude で「接続」を押し直すことになります。
+
+## 手順 3：ウェブアプリケーションの OAuth クライアントを作る
+
+1. 「API とサービス」で「認証情報」を開きます。
+2. 「認証情報を作成」→「OAuth クライアント ID」を押します。
+3. アプリケーションの種類は「ウェブアプリケーション」を選びます。
+4. 名前：google-tasks-mcp web client（好きな名前でかまいません）
+5. 「承認済みのリダイレクト URI」で「URI を追加」を押し、次を入力します。
    https://YOUR_DEPLOYED_DOMAIN/callback
-   (You may not know the exact domain until after Step 4. You can either deploy first and come back, or set a placeholder now and edit it in Step 5.)
-6. Click Create.
-7. Copy the Client ID and Client Secret. You will paste these into Deno Deploy as GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET.
+   正確なドメインは手順 4 が終わるまで分からないかもしれません。先にデプロイしてから戻ってくるか、仮の値を入れておいて手順 5 で直してください。
+6. 「作成」を押します。
+7. クライアント ID とクライアント シークレットを控えます。これらは Deno Deploy に GOOGLE_CLIENT_ID と GOOGLE_CLIENT_SECRET として設定します。
 
-Note: The redirect URI in Google must match GOOGLE_REDIRECT_URI exactly, including https and the /callback path.
+注意：Google 側のリダイレクト URI は、GOOGLE_REDIRECT_URI と完全に一致させる必要があります。https と /callback のパスも含めて同じにしてください。
 
-## Step 4: Deploy to Deno Deploy
+## 手順 4：Deno Deploy にデプロイする
 
-The entry point compiles from src/index.ts to build/index.js (see tsconfig.json, outDir build). The compiled module exports a default object with a fetch handler, which is exactly the format Deno Deploy expects:
+入口は src/index.ts で、build/index.js にコンパイルされます（tsconfig.json の outDir が build）。コンパイルしたモジュールは、fetch ハンドラーを持つオブジェクトを default でエクスポートします。これが Deno Deploy の求める形式です。
 
     export default { fetch: app.fetch };
 
-The server also serves static files from the public directory (the landing page, privacy policy, and favicon), so the public folder must be included in the deployment.
+サーバーは public ディレクトリの静的ファイル（トップページ、プライバシーポリシー、favicon）も配信します。そのため、デプロイには public フォルダも含めてください。
 
-You can deploy either from the Deno Deploy dashboard (recommended, no local toolchain needed) or with the deployctl CLI.
+デプロイは、Deno Deploy の管理画面からでも（おすすめ。ローカルの開発環境は不要です）、deployctl CLI からでもできます。
 
-### Option A: Deno Deploy dashboard (GitHub integration)
+### 方法 A：Deno Deploy の管理画面（GitHub 連携）
 
-1. Go to https://dash.deno.com and sign in with GitHub.
-2. Click New Project.
-3. Select your forked repository: Gabriel-Dalton/google-tasks-mcp.
-4. For the entry point, set: build/index.js
-   Important: build/ is gitignored, so it is not in the repo. Either:
-   (a) Configure the project to run the build step. In the project Build settings, set the install step to "npm install" and the build command to "npm run build" so Deno Deploy produces build/index.js before serving; or
-   (b) Use the Deno-native entry point src/index.ts directly. Because tsconfig uses rewriteRelativeImportExtensions and the source already uses .ts import specifiers, Deno can run src/index.ts without a separate tsc step. If you choose this, set the entry point to src/index.ts and skip the build command.
-5. Set the environment variables (see the table in Step 4c) in the project Settings, Environment Variables.
-6. Deploy. Note the production URL Deno assigns (for example https://google-tasks-mcp.deno.dev). That is your YOUR_DEPLOYED_DOMAIN.
+1. https://dash.deno.com を開き、GitHub でログインします。
+2. 「New Project」を押します。
+3. fork したリポジトリを選びます。
+4. エントリーポイントに build/index.js を指定します。
+   注意：build/ は gitignore されているので、リポジトリには入っていません。次のどちらかにしてください。
+   (a) ビルドを実行するように設定する。プロジェクトの Build の設定で、インストールのステップを「npm install」、ビルドコマンドを「npm run build」にします。これで Deno Deploy が配信の前に build/index.js を作ります。
+   (b) Deno 向けの入口として src/index.ts を直接使う。tsconfig は rewriteRelativeImportExtensions を使っていて、ソースはすでに .ts の拡張子で import しているので、Deno なら tsc を通さずに src/index.ts を動かせます。この場合は、エントリーポイントを src/index.ts にして、ビルドコマンドは省きます。
+5. プロジェクトの Settings → Environment Variables で、環境変数を設定します（手順 4c の表を参照）。
+6. デプロイします。Deno が割り当てる本番の URL（例：https://google-tasks-mcp.deno.dev）を控えます。これが YOUR_DEPLOYED_DOMAIN です。
 
-### Option B: deployctl CLI (local)
+### 方法 B：deployctl CLI（ローカル）
 
-This requires the Deno CLI and a Deno Deploy access token, and it requires your Deno login. Do not paste your token into this document or any web form.
+Deno CLI と Deno Deploy のアクセストークン、それに Deno へのログインが必要です。トークンは、この手順書にも Web のフォームにも貼り付けないでください。
 
-    # Install deno (if not installed), then build and deploy
+    # deno をインストールしてから（まだなら）、ビルドしてデプロイする
     npm install
     npm run build
     deployctl deploy --project=google-tasks-mcp --include=build,public build/index.js
 
-The --include=build,public flag ensures both the compiled entry point and the static public assets are uploaded. After deploying, set the environment variables in the dashboard (deployctl can also set them with --env or --env-file, but never commit a file containing real secrets).
+--include=build,public を付けると、コンパイルした入口と public の静的ファイルの両方がアップロードされます。デプロイが終わったら、管理画面で環境変数を設定します。deployctl でも --env や --env-file で設定できますが、本物の秘密情報を入れたファイルは絶対にコミットしないでください。
 
-### Step 4c: Environment variables to set in Deno Deploy
+### 手順 4c：Deno Deploy に設定する環境変数
 
-Set these in Deno Deploy under Project Settings, Environment Variables:
+Deno Deploy の Project Settings → Environment Variables で設定します。
 
-| Variable | Required | Value to use |
+| 変数 | 必須 | 設定する値 |
 | --- | --- | --- |
-| GOOGLE_CLIENT_ID | Yes | The Client ID from Step 3. |
-| GOOGLE_CLIENT_SECRET | Yes | The Client Secret from Step 3. |
-| GOOGLE_REDIRECT_URI | Yes | https://YOUR_DEPLOYED_DOMAIN/callback (must match the Google redirect URI exactly). |
-| ENCRYPTION_SECRET | Yes | A 32+ character random secret. Generate locally with: npm run generate-secret (it prints a line beginning with ENCRYPTION_SECRET=; use only the hex value after the equals sign). |
-| ALLOWED_ORIGINS | Recommended | https://claude.ai |
-| PORT | No | Leave unset on Deno Deploy (it uses the fetch handler, not a port). Useful only for local runs (default 3000). |
-| LOG_LEVEL | No | info (or debug while troubleshooting). |
+| GOOGLE_CLIENT_ID | はい | 手順 3 のクライアント ID |
+| GOOGLE_CLIENT_SECRET | はい | 手順 3 のクライアント シークレット |
+| GOOGLE_REDIRECT_URI | はい | https://YOUR_DEPLOYED_DOMAIN/callback（Google のリダイレクト URI と完全に一致させる） |
+| ENCRYPTION_SECRET | はい | 32 文字以上のランダムな秘密鍵。ローカルで npm run generate-secret を実行して作ります。出力は ENCRYPTION_SECRET= で始まる 1 行なので、等号より後ろの 16 進の値だけを使います。 |
+| ALLOWED_REDIRECT_URIS | はい（このフォーク） | https://claude.ai/api/mcp/auth_callback（ほかのクライアントも使うなら、カンマ区切りで足す） |
+| ALLOWED_ORIGINS | 推奨 | https://claude.ai |
+| PORT | いいえ | Deno Deploy では設定しません（ポートではなく fetch ハンドラーを使うため）。ローカルで動かすときだけ使います（既定は 3000）。 |
+| LOG_LEVEL | いいえ | info（調査中は debug） |
 
-Keep ENCRYPTION_SECRET stable across restarts. If it changes, previously stored encrypted tokens can no longer be decrypted and you will have to re-authorize.
+ENCRYPTION_SECRET は、再起動しても変えないでください。変えると、保存済みの暗号化されたトークンを復号できなくなり、許可し直す必要があります。
 
-## Step 5: Update the Google OAuth redirect URI
+## 手順 5：Google の OAuth のリダイレクト URI を更新する
 
-Once you know your live domain from Step 4, go back to Google Cloud Console, APIs and Services, Credentials, open your Web application OAuth client, and make sure Authorized redirect URIs contains exactly:
+手順 4 で本番のドメインが分かったら、Google Cloud Console に戻ります。「API とサービス」→「認証情報」でウェブアプリケーションの OAuth クライアントを開き、「承認済みのリダイレクト URI」に次がそのまま入っているか確認します。
 
     https://YOUR_DEPLOYED_DOMAIN/callback
 
-Confirm it matches the GOOGLE_REDIRECT_URI environment variable in Deno Deploy. Save.
+Deno Deploy の環境変数 GOOGLE_REDIRECT_URI と一致していることを確かめて、保存します。
 
-You can sanity check the deployment by visiting:
+次の URL を開くと、デプロイが正しくできているか簡単に確認できます。
 
     https://YOUR_DEPLOYED_DOMAIN/.well-known/oauth-authorization-server
 
-It should return a JSON document describing the issuer, authorization_endpoint (/authorize), token_endpoint (/token), and mcp_endpoint (/mcp).
+issuer、authorization_endpoint（/authorize）、token_endpoint（/token）、mcp_endpoint（/mcp）を書いた JSON が返ってくるはずです。
 
-## Step 6: Add the custom connector in the Claude app
+## 手順 6：Claude アプリでカスタムコネクタを追加する
 
-1. Open the Claude app (claude.ai or the desktop app).
-2. Go to Settings.
-3. Open Connectors.
-4. Click Add custom connector.
-5. Fill in:
-   - Name: Google Tasks (or any name you prefer).
-   - Remote MCP server URL: https://YOUR_DEPLOYED_DOMAIN/mcp
-6. Click Add.
-7. Find the new connector and click Connect.
-8. A browser window opens with the Google authorization page. Sign in with the same Google account you added as a test user (or that owns the published app), and approve the Google Tasks permission.
-9. You are redirected back and the connection completes.
+1. Claude アプリ（claude.ai かデスクトップアプリ）を開きます。
+2. 設定を開きます。
+3. コネクタを開きます。
+4. 「カスタムコネクタを追加」を押します。
+5. 次の内容を入力します。
+   - 名前：Google Tasks（好きな名前でかまいません）
+   - リモート MCP サーバーの URL：https://YOUR_DEPLOYED_DOMAIN/mcp
+6. 「追加」を押します。
+7. 追加したコネクタを探して「接続」を押します。
+8. ブラウザで Google の認可ページが開きます。テストユーザーに加えたアカウント（公開済みなら、アプリの持ち主のアカウント）でログインし、Google Tasks の権限を許可します。
+9. 元の画面に戻れば接続は完了です。
 
-After connecting, you can ask Claude things like "What task lists do I have?" or "Add a task to my Work list due Friday."
+接続したら、「タスクリストには何がある？」「仕事リストに金曜期限のタスクを追加して」のように Claude に頼めます。
 
-## Troubleshooting
+## 困ったとき
 
-If the Google consent screen shows "access blocked" or "app not verified": confirm your Google account is listed as a test user (Testing mode), or that the app is published to production. The unverified warning can be bypassed for your own account via Advanced, then Go to App.
+Google の同意画面に「アクセスをブロック」や「未確認のアプリ」と出る場合：自分の Google アカウントがテストユーザーに入っているか（テストモードの場合）、アプリを本番環境に公開しているかを確認してください。未確認の警告は、自分のアカウントなら「詳細」→「（アプリ名）に移動」で進めます。
 
-If Claude cannot connect or CORS errors appear: confirm ALLOWED_ORIGINS includes https://claude.ai exactly (no trailing slash), and that the discovery URL returns valid JSON.
+Claude から接続できない、または CORS のエラーが出る場合：ALLOWED_ORIGINS に https://claude.ai がそのまま入っているか（末尾のスラッシュなし）、ディスカバリーの URL が正しい JSON を返すかを確認してください。
 
-If you must re-authorize every week: your consent screen is still in Testing mode. Publish to production (see the gotcha in Step 2).
+このフォークで、接続の途中に redirect_uri is not allowed や invalid_redirect_uri が出る場合：クライアントのコールバック URL が ALLOWED_REDIRECT_URIS に入っていません。サーバーのログに、弾いた URI が redirectUris=[...] として出ているので、それを確かめてから追加してください。
 
-If tokens stop working after a redeploy: confirm ENCRYPTION_SECRET did not change between deployments.
+毎週許可し直す必要がある場合：同意画面がまだテストモードです。本番環境に公開してください（手順 2 の注意を参照）。
 
-## Security notes
+再デプロイ後にトークンが使えなくなった場合：デプロイの前後で ENCRYPTION_SECRET が変わっていないか確認してください。
 
-Never commit real secrets. The .env file is listed in .gitignore (alongside build/ and node_modules/), so a local .env will not be tracked. Keep .env.example with placeholder values only.
+## セキュリティ上の注意
+
+本物の秘密情報は絶対にコミットしないでください。.env ファイルは .gitignore に入っています（build/ や node_modules/ と同じ）。そのため、ローカルの .env が Git に追跡されることはありません。.env.example には仮の値だけを書いておいてください。

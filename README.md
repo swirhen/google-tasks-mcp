@@ -1,330 +1,357 @@
-# Google Tasks MCP Server
+# Google Tasks MCP サーバー
 
-A Model Context Protocol (MCP) server that brings your Google Tasks into Claude and other MCP-compatible clients. Manage your tasks, task lists, and to-dos through natural conversation.
+Google Tasks を Claude などの MCP 対応クライアントから使えるようにする、Model Context Protocol（MCP）サーバーです。タスク、タスクリスト、ToDo を会話で管理できます。
 
-**🔒 Privacy First**: This repository is public to demonstrate transparency. The code shows that **no personal information is logged or stored maliciously**. All sensitive data (tokens) is encrypted at rest and automatically redacted from logs. You can review the entire codebase to verify this commitment to privacy.
+**🔒 プライバシー重視**：透明性を示すため、このリポジトリは公開しています。**個人情報を不正に記録・保存していない**ことは、コードを読めば確かめられます。機密データ（トークン）は暗号化して保存し、ログからは自動で伏せます。コード全体を読んで、この方針が守られているか確認できます。
 
-**⚠️ Disclaimer**: This server is provided **as-is** without any guarantees or warranties. While every effort has been made to ensure security and privacy, no guarantees are made about availability, data integrity, or security. Use at your own risk. For production use cases, consider self-hosting your own instance.
+**⚠️ 免責事項**：このサーバーは**現状のまま**提供するもので、保証は一切ありません。セキュリティとプライバシーには十分配慮していますが、稼働率・データの完全性・セキュリティについて何も保証しません。自己責任で使ってください。本番用途では、自分でホストすることを検討してください。
 
-## Table of Contents
+## このフォークについて
 
-- [What Can You Do With This?](#what-can-you-do-with-this)
-- [For End Users: Using the Hosted Server](#for-end-users-using-the-hosted-server)
-  - [Prerequisites](#prerequisites)
-  - [Setup Instructions](#setup-instructions)
-  - [Available Tools](#available-tools)
-  - [Example Conversations](#example-conversations)
-  - [Privacy & Security](#privacy--security)
-- [For Developers: Self-Hosting](#for-developers-self-hosting)
-  - [Prerequisites](#prerequisites-1)
-  - [Step 1: Create Google Cloud Project](#step-1-create-google-cloud-project)
-  - [Step 2: Clone and Setup](#step-2-clone-and-setup)
-  - [Step 3: Local Development](#step-3-local-development)
-  - [Step 4: Deploy to Production](#step-4-deploy-to-production)
-  - [Step 5: Update Google OAuth Settings](#step-5-update-google-oauth-settings)
-  - [Step 6: Configure Your MCP Client](#step-6-configure-your-mcp-client)
-  - [Environment Variables Reference](#environment-variables-reference)
-  - [Development Commands](#development-commands)
-  - [Project Structure](#project-structure)
-- [Security Features](#security-features)
-  - [Token Encryption](#token-encryption)
-  - [Privacy-Safe Logging](#privacy-safe-logging)
-- [Contributing](#contributing)
-- [License](#license)
-- [Support](#support)
-- [Acknowledgments](#acknowledgments)
+このリポジトリは [akutishevsky/google-tasks-mcp](https://github.com/akutishevsky/google-tasks-mcp) の fork です。Deno Deploy ではなく、自前のサーバー（Node + systemd + Apache のサブパス配下）で動かすために、`selfhost` ブランチで次の変更を入れています。
 
-## What Can You Do With This?
+- **Node で起動できる**：`npm start`（`build/serve.js`）で、`HOST` と `PORT` で指定したアドレスで待ち受けます。
+- **KV を永続化する**：`KV_PATH` を指定すると、Deno KV を SQLite ファイルに保存します。再起動しても接続が消えません。
+- **サブパス配下に置ける**：`PUBLIC_BASE_URL`（例：`https://example.com/google_tasks_mcp`）を指定すると、OAuth のメタデータがその URL を返します。
+- **MCP の認可の仕様に合わせた**：Protected Resource Metadata（`/.well-known/oauth-protected-resource`）を返し、401 に `WWW-Authenticate` を付けます。
+- **redirect_uri を検証する**：`ALLOWED_REDIRECT_URIS`（カンマ区切り、完全一致）とループバックアドレスだけを許可します。upstream は任意の URI を受け付けるので、罠のリンク経由で認可コードを第三者に渡してしまうおそれがあります。弾いた URI は、クエリを除いてログに出します。
+- **refresh_token に対応した**：アクセストークン（30 日）と一緒に refresh_token（最後の更新から 180 日）を発行します。refresh_token は使うたびに作り直します。
+- **Google Analytics を外した**：upstream の作者の Google Analytics を、プライバシーポリシーのページから外しました。
 
-This MCP server gives Claude access to your Google Tasks data, allowing you to:
+配置に使うファイルは `google-tasks-mcp.service`（systemd ユニット）と `google-tasks-mcp.env.example`（秘密情報のひな形）です。
 
-- **Manage task lists**: Create, read, update, and delete task lists
-- **Manage tasks**: Create, read, update, delete, and move tasks
-- **Organize tasks**: Create subtasks, set due dates, add notes
-- **Mark completion**: Mark tasks as complete or incomplete
-- **Batch operations**: Clear all completed tasks from a list
-- **Query tasks**: Filter tasks by completion status, due date, and more
-- **Natural language**: Interact with your tasks through conversation with Claude
+## 目次
 
-All through natural conversation with Claude or any other MCP-compatible client.
+- [このフォークについて](#このフォークについて)
+- [何ができるか](#何ができるか)
+- [利用者向け：ホストされたサーバーを使う](#利用者向けホストされたサーバーを使う)
+  - [必要なもの](#必要なもの)
+  - [設定手順](#設定手順)
+  - [使えるツール](#使えるツール)
+  - [会話の例](#会話の例)
+  - [プライバシーとセキュリティ](#プライバシーとセキュリティ)
+- [開発者向け：セルフホスト](#開発者向けセルフホスト)
+  - [必要なもの](#必要なもの-1)
+  - [手順 1：Google Cloud プロジェクトを作る](#手順-1google-cloud-プロジェクトを作る)
+  - [手順 2：clone と準備](#手順-2clone-と準備)
+  - [手順 3：ローカルで開発する](#手順-3ローカルで開発する)
+  - [手順 4：本番にデプロイする](#手順-4本番にデプロイする)
+  - [手順 5：Google の OAuth 設定を更新する](#手順-5google-の-oauth-設定を更新する)
+  - [手順 6：MCP クライアントを設定する](#手順-6mcp-クライアントを設定する)
+  - [環境変数一覧](#環境変数一覧)
+  - [開発用コマンド](#開発用コマンド)
+  - [ディレクトリ構成](#ディレクトリ構成)
+- [セキュリティ機能](#セキュリティ機能)
+  - [トークンの暗号化](#トークンの暗号化)
+  - [プライバシーに配慮したログ](#プライバシーに配慮したログ)
+- [コントリビュート](#コントリビュート)
+- [ライセンス](#ライセンス)
+- [サポート](#サポート)
+- [謝辞](#謝辞)
 
-## For End Users: Using the Hosted Server
+## 何ができるか
 
-If you just want to use this MCP server with Claude Desktop without hosting anything yourself, follow these steps:
+この MCP サーバーを使うと、Claude から Google Tasks のデータを扱えるようになります。
 
-### Prerequisites
+- **タスクリストの管理**：作成・取得・更新・削除
+- **タスクの管理**：作成・取得・更新・削除・移動
+- **タスクの整理**：サブタスクの作成、期限の設定、メモの追加
+- **完了状態の変更**：完了・未完了の切り替え
+- **まとめて操作**：リストから完了済みのタスクをまとめて消す
+- **タスクの検索**：完了状態や期限などで絞り込む
+- **自然な言葉で操作**：Claude との会話でタスクを扱う
 
-1. A [Google Account](https://accounts.google.com/) with Google Tasks
-2. [Claude Desktop](https://claude.ai/download) or any other MCP-compatible client installed on your computer
+どれも Claude や、ほかの MCP 対応クライアントとの会話でできます。
 
-### Setup Instructions
+## 利用者向け：ホストされたサーバーを使う
 
-#### Step 1: Add Connector in Claude Desktop
+自分でホストせずに Claude Desktop から使うだけなら、次の手順で設定します。
 
-1. Open Claude Desktop
-2. Go to **Settings** (gear icon in the bottom-left corner)
-3. Navigate to the **Connectors** tab
-4. Click **Add Custom Connector**
-5. Fill in the following details:
-   - **Name**: `Google Tasks` (or any name you prefer)
-   - **Remote MCP server URL**: `https://your-deployed-domain.com/mcp`
-6. Click **Add**
+### 必要なもの
 
-#### Step 2: Connect and Authorize
+1. Google Tasks を使っている [Google アカウント](https://accounts.google.com/)
+2. [Claude Desktop](https://claude.ai/download)、またはほかの MCP 対応クライアント
 
-1. In the **Connectors** settings, find the Google Tasks connector you just added
-2. Click **Connect** next to the connector
-3. Your web browser will open with the Google authorization page
-4. Log in to your Google account
-5. Review and approve the permissions requested
-6. You'll be redirected back and the connection will be complete
+### 設定手順
 
-After authorization, Claude will have access to your Google Tasks!
+#### 手順 1：Claude Desktop にコネクタを追加する
 
-### Available Tools
+1. Claude Desktop を開きます。
+2. **設定**（左下の歯車アイコン）を開きます。
+3. **コネクタ** タブを開きます。
+4. **カスタムコネクタを追加** を押します。
+5. 次の内容を入力します。
+   - **名前**：`Google Tasks`（好きな名前でかまいません）
+   - **リモート MCP サーバーの URL**：`https://your-deployed-domain.com/mcp`
+6. **追加** を押します。
 
-Once connected, Claude can use these tools to access your data:
+#### 手順 2：接続して許可する
 
-#### Task Lists Management
-- `list_task_lists` - Returns all the authenticated user's task lists
-- `get_task_list` - Returns a specific task list
-- `insert_task_list` - Creates a new task list
-- `update_task_list` - Updates a task list (full update)
-- `patch_task_list` - Updates a task list (partial update)
-- `delete_task_list` - Deletes a task list
+1. **コネクタ** の設定で、追加した Google Tasks のコネクタを探します。
+2. コネクタの横の **接続** を押します。
+3. ブラウザで Google の認可ページが開きます。
+4. Google アカウントでログインします。
+5. 求められる権限を確認して許可します。
+6. 元の画面に戻れば接続は完了です。
 
-#### Tasks Management
-- `list_tasks` - Returns all tasks in a task list
-- `get_task` - Returns a specific task
-- `insert_task` - Creates a new task
-- `update_task` - Updates a task (full update)
-- `patch_task` - Updates a task (partial update)
-- `delete_task` - Deletes a task
-- `clear_completed_tasks` - Clears all completed tasks from a list
-- `move_task` - Moves a task to a different position or parent
+許可すると、Claude から Google Tasks を使えるようになります。
 
-### Example Conversations
+### 使えるツール
 
-Try asking Claude:
+接続すると、Claude は次のツールでデータを扱えます。
 
-- "What task lists do I have?"
-- "Show me all tasks in my Work list"
-- "Create a new task list called 'Personal Projects'"
-- "Add a task 'Review Q4 reports' to my Work list with due date next Friday"
-- "Mark the task 'Buy groceries' as completed"
-- "Move 'Write proposal' task to be a subtask of 'Client project'"
-- "Clear all completed tasks from my Shopping list"
-- "What tasks are due this week?"
+#### タスクリストの管理
+- `list_task_lists`：ログインしたユーザーのタスクリストをすべて返す
+- `get_task_list`：指定したタスクリストを返す
+- `insert_task_list`：タスクリストを作る
+- `update_task_list`：タスクリストを更新する（全体を置き換え）
+- `patch_task_list`：タスクリストを更新する（一部だけ）
+- `delete_task_list`：タスクリストを削除する
 
-### Privacy & Security
+#### タスクの管理
+- `list_tasks`：タスクリスト内のタスクをすべて返す
+- `get_task`：指定したタスクを返す
+- `insert_task`：タスクを作る
+- `update_task`：タスクを更新する（全体を置き換え）
+- `patch_task`：タスクを更新する（一部だけ）
+- `delete_task`：タスクを削除する
+- `clear_completed_tasks`：リストから完了済みのタスクをすべて消す
+- `move_task`：タスクの位置や親タスクを変える
 
-- **Encrypted tokens**: All authentication tokens are encrypted using AES-256-GCM before storage
-- **No logging of personal data**: The code is public - you can verify that no sensitive information is logged
-- **Automatic redaction**: All user IDs, tokens, and credentials are automatically redacted from system logs
-- **OAuth 2.0**: Industry-standard secure authentication with Google
-- **You're in control**: Revoke access anytime from your Google account settings
+### 会話の例
+
+Claude に次のように頼んでみてください。
+
+- 「タスクリストには何がある？」
+- 「仕事リストのタスクを全部見せて」
+- 「『個人プロジェクト』というタスクリストを作って」
+- 「仕事リストに『第 4 四半期レポートの確認』を来週金曜期限で追加して」
+- 「『買い物』のタスクを完了にして」
+- 「『提案書を書く』を『クライアント案件』のサブタスクにして」
+- 「買い物リストの完了済みタスクを全部消して」
+- 「今週が期限のタスクは？」
+
+### プライバシーとセキュリティ
+
+- **トークンの暗号化**：認証トークンはすべて AES-256-GCM で暗号化してから保存します。
+- **個人データを記録しない**：コードは公開しているので、機密情報をログに残していないことを確かめられます。
+- **自動で伏せる**：ユーザー ID・トークン・認証情報は、システムログから自動で伏せます。
+- **OAuth 2.0**：Google との認証には、業界標準の安全な仕組みを使います。
+- **いつでも止められる**：Google アカウントの設定から、いつでもアクセスを取り消せます。
 
 ---
 
-## For Developers: Self-Hosting
+## 開発者向け：セルフホスト
 
-Want to run your own instance? Here's how to deploy this MCP server yourself.
+自分のインスタンスを動かす手順です。
 
-### Prerequisites
+> このフォークを自前のサーバーで動かす場合は、[このフォークについて](#このフォークについて) と [環境変数一覧](#環境変数一覧) もあわせて読んでください。以下の手順 4 は upstream の Deno Deploy 向けの内容です。
 
-1. [Node.js](https://nodejs.org/) 18+ and npm installed
-2. [Deno CLI](https://deno.land/) installed for deployment
-3. A [Google Cloud Platform](https://console.cloud.google.com/) account
+### 必要なもの
 
-### Step 1: Create Google Cloud Project
+1. [Node.js](https://nodejs.org/) 18 以上と npm
+2. デプロイ用の [Deno CLI](https://deno.land/)
+3. [Google Cloud Platform](https://console.cloud.google.com/) のアカウント
 
-1. Go to [Google Cloud Console](https://console.cloud.google.com/)
-2. Create a new project or select an existing one
-3. Enable the Google Tasks API:
-   - Go to **APIs & Services** → **Library**
-   - Search for "Google Tasks API"
-   - Click **Enable**
-4. Create OAuth 2.0 credentials:
-   - Go to **APIs & Services** → **Credentials**
-   - Click **Create Credentials** → **OAuth client ID**
-   - Choose **Web application**
-   - Add authorized redirect URIs: `https://your-domain.com/callback`
-   - Note your **Client ID** and **Client Secret**
-5. Configure OAuth consent screen:
-   - Go to **APIs & Services** → **OAuth consent screen**
-   - Add required scopes: `https://www.googleapis.com/auth/tasks`
+### 手順 1：Google Cloud プロジェクトを作る
 
-### Step 2: Clone and Setup
+1. [Google Cloud Console](https://console.cloud.google.com/) を開きます。
+2. プロジェクトを新しく作るか、既存のものを選びます。
+3. Google Tasks API を有効にします。
+   - **API とサービス** → **ライブラリ** を開きます。
+   - 「Google Tasks API」を検索します。
+   - **有効にする** を押します。
+4. OAuth 2.0 の認証情報を作ります。
+   - **API とサービス** → **認証情報** を開きます。
+   - **認証情報を作成** → **OAuth クライアント ID** を押します。
+   - 種類は **ウェブアプリケーション** を選びます。
+   - 承認済みのリダイレクト URI に `https://your-domain.com/callback` を追加します。
+   - **クライアント ID** と **クライアント シークレット** を控えておきます。
+5. OAuth 同意画面を設定します。
+   - **API とサービス** → **OAuth 同意画面** を開きます。
+   - スコープ `https://www.googleapis.com/auth/tasks` を追加します。
+
+### 手順 2：clone と準備
 
 ```bash
-# Clone the repository
-git clone https://github.com/akutishevsky/google-tasks-mcp.git
+# リポジトリを clone する
+git clone https://github.com/swirhen/google-tasks-mcp.git
 cd google-tasks-mcp
 
-# Install dependencies
+# 依存をインストールする
 npm install
 
-# Generate encryption secret
+# 暗号化用の秘密鍵を作る
 npm run generate-secret
-# Copy the output - you'll need it for environment variables
+# 出力は環境変数に使うので控えておく
 ```
 
-### Step 3: Local Development
+### 手順 3：ローカルで開発する
 
-> **Note**: Google requires a publicly accessible URL for OAuth callbacks. For local development, use a tunneling service (like ngrok) to expose your local server or deploy to a staging environment for testing.
+> **注意**：Google の OAuth のコールバックには、外から届く URL が必要です。ローカルで開発するときは、トンネル用のサービス（ngrok など）でローカルのサーバーを公開するか、検証用の環境にデプロイして試してください。
 
 ```bash
-# Copy environment template
+# 環境変数のひな形をコピーする
 cp .env.example .env
 
-# Edit .env with your values
+# .env に値を書く
 # GOOGLE_CLIENT_ID=your_client_id
 # GOOGLE_CLIENT_SECRET=your_client_secret
 # GOOGLE_REDIRECT_URI=https://your-tunnel-url.com/callback
 # ENCRYPTION_SECRET=paste_generated_secret_here
 # PORT=3000
 
-# Build the project
+# ビルドする
 npm run build
 
-# Run with Deno
+# Deno で動かす
 deno task dev
 ```
 
-Make sure your redirect URI in the .env file matches the publicly accessible URL pointing to your local server.
+.env のリダイレクト URI は、ローカルのサーバーにつながる公開 URL と一致させてください。
 
-### Step 4: Deploy to Production
+### 手順 4：本番にデプロイする
 
-#### Deploy to Deno Deploy
+#### Deno Deploy にデプロイする
 
-1. Install Deno Deploy CLI:
+1. Deno Deploy の CLI をインストールします。
 ```bash
 deno install -A --unstable https://deno.land/x/deploy/deployctl.ts
 ```
 
-2. Deploy the project:
+2. デプロイします。
 ```bash
-# Build first
+# 先にビルドする
 npm run build
 
-# Deploy to Deno Deploy
+# Deno Deploy にデプロイする
 deployctl deploy --project=google-tasks-mcp build/index.js
 ```
 
-3. Set environment variables in Deno Deploy dashboard:
-   - Go to your project settings
-   - Add all required environment variables
-   - Restart the deployment
+3. Deno Deploy の管理画面で環境変数を設定します。
+   - プロジェクトの設定を開きます。
+   - 必要な環境変数をすべて追加します。
+   - デプロイを再起動します。
 
-### Step 5: Update Google OAuth Settings
+### 手順 5：Google の OAuth 設定を更新する
 
-Go back to your Google Cloud Console OAuth client and update the redirect URI to match your deployed URL:
+Google Cloud Console の OAuth クライアントに戻り、リダイレクト URI をデプロイ先の URL に合わせます。
 `https://your-domain.com/callback`
 
-### Step 6: Configure Your MCP Client
+### 手順 6：MCP クライアントを設定する
 
-#### For Claude Desktop:
+#### Claude Desktop の場合
 
-1. Open Claude Desktop
-2. Go to **Settings** → **Connectors** tab
-3. Click **Add Custom Connector**
-4. Fill in the following details:
-   - **Name**: `Google Tasks` (or any name you prefer)
-   - **Remote MCP server URL**: `https://your-domain.com/mcp`
-5. Click **Add**
-6. Click **Connect** next to the connector to authorize
+1. Claude Desktop を開きます。
+2. **設定** → **コネクタ** タブを開きます。
+3. **カスタムコネクタを追加** を押します。
+4. 次の内容を入力します。
+   - **名前**：`Google Tasks`（好きな名前でかまいません）
+   - **リモート MCP サーバーの URL**：`https://your-domain.com/mcp`
+5. **追加** を押します。
+6. コネクタの横の **接続** を押して許可します。
 
-#### For Other MCP Clients:
+#### ほかの MCP クライアントの場合
 
-Configure your MCP client with the following connection details:
-- **Server URL**: `https://your-domain.com`
-- **Transport**: Server-Sent Events (SSE)
-- **Endpoint**: `/mcp`
-- **Authentication**: OAuth 2.0
-- **Discovery URL**: `/.well-known/oauth-authorization-server`
+次の接続情報を設定します。
+- **サーバーの URL**：`https://your-domain.com`
+- **トランスポート**：Server-Sent Events（SSE）
+- **エンドポイント**：`/mcp`
+- **認証**：OAuth 2.0
+- **ディスカバリー URL**：`/.well-known/oauth-authorization-server`
 
-### Environment Variables Reference
+このフォークでは、クライアントのコールバック URL を `ALLOWED_REDIRECT_URIS` に入れておく必要があります。localhost に戻るクライアントは、入れなくても通ります。
 
-| Variable | Required | Description |
+### 環境変数一覧
+
+| 変数 | 必須 | 説明 |
 |----------|----------|-------------|
-| `GOOGLE_CLIENT_ID` | Yes | Your Google OAuth client ID |
-| `GOOGLE_CLIENT_SECRET` | Yes | Your Google OAuth client secret |
-| `GOOGLE_REDIRECT_URI` | Yes | OAuth callback URL (must match Google Cloud Console settings) |
-| `ENCRYPTION_SECRET` | Yes | 32+ character secret for token encryption (generate with `npm run generate-secret`) |
-| `PORT` | No | Server port (default: 3000) |
-| `LOG_LEVEL` | No | Logging level: trace, debug, info, warn, error (default: info) |
-| `ALLOWED_ORIGINS` | No | Comma-separated list of allowed CORS origins for browser clients |
+| `GOOGLE_CLIENT_ID` | はい | Google の OAuth クライアント ID |
+| `GOOGLE_CLIENT_SECRET` | はい | Google の OAuth クライアント シークレット |
+| `GOOGLE_REDIRECT_URI` | はい | OAuth のコールバック URL（Google Cloud Console の設定と一致させる） |
+| `ENCRYPTION_SECRET` | はい | トークンの暗号化に使う 32 文字以上の秘密鍵（`npm run generate-secret` で作る） |
+| `PORT` | いいえ | 待ち受けるポート（既定は 3000） |
+| `HOST` | いいえ | 待ち受けるアドレス。`npm start` のときだけ使う（既定は `127.0.0.1`）。fork で追加 |
+| `PUBLIC_BASE_URL` | いいえ | 外から見たときのサーバーの URL。サブパス配下に置くときに指定する（既定はリクエストの origin）。fork で追加 |
+| `ALLOWED_REDIRECT_URIS` | いいえ | 認可コードを返してよいクライアントのコールバック URL。カンマ区切りで完全一致。ループバックアドレスは常に許可する。fork で追加 |
+| `KV_PATH` | いいえ | Deno KV を保存する SQLite ファイル。未指定ならメモリ上に置き、再起動で消える。fork で追加 |
+| `LOG_LEVEL` | いいえ | ログの出力レベル：trace、debug、info、warn、error（既定は info） |
+| `ALLOWED_ORIGINS` | いいえ | ブラウザのクライアントに CORS を許可する origin。カンマ区切り |
 
-### Development Commands
+### 開発用コマンド
 
 ```bash
-npm run build            # Compile TypeScript to JavaScript
-npm run dev              # Watch mode - recompile on changes
-npm run generate-secret  # Generate encryption secret for ENCRYPTION_SECRET env variable
+npm run build            # TypeScript を JavaScript にコンパイルする
+npm run dev              # 監視モード。変更のたびにコンパイルし直す
+npm start                # Node で起動する（build/serve.js）。fork で追加
+npm run generate-secret  # 環境変数 ENCRYPTION_SECRET 用の秘密鍵を作る
 ```
 
-### Project Structure
+### ディレクトリ構成
 
 ```
 src/
-├── auth/              # OAuth 2.0 authentication & token storage
-├── server/            # Hono app, MCP endpoints, middleware
-├── tools/             # MCP tools for Google Tasks API (tasklists, tasks)
-├── transport/         # Custom SSE transport for MCP
-├── google/            # Google Tasks API client
-├── utils/             # Logger and encryption utilities
-└── index.ts           # Main entry point
+├── auth/              # OAuth 2.0 の認証とトークンの保存
+├── server/            # Hono のアプリ、MCP のエンドポイント、ミドルウェア
+├── tools/             # Google Tasks API を使う MCP ツール（tasklists、tasks）
+├── transport/         # MCP 用の独自 SSE トランスポート
+├── google/            # Google Tasks API のクライアント
+├── utils/             # ロガー、暗号化、KV
+├── index.ts           # メインの入口（Deno Deploy 用）
+└── serve.ts           # Node 用の起動口（fork で追加）
 ```
 
-## Security Features
+## セキュリティ機能
 
-### Token Encryption
+### トークンの暗号化
 
-All Google access and refresh tokens are encrypted at rest using **AES-256-GCM**:
+Google のアクセストークンと refresh token は、すべて **AES-256-GCM** で暗号化して保存します。
 
-- **Algorithm**: AES-256-GCM (authenticated encryption)
-- **Key Derivation**: PBKDF2 with 100,000 iterations
-- **Defense in Depth**: Even if the database is compromised, tokens remain protected
+- **アルゴリズム**：AES-256-GCM（認証付き暗号）
+- **鍵の導出**：PBKDF2、反復 100,000 回
+- **多層防御**：データベースが漏れても、トークンは守られます
 
-**Important**: Keep your `ENCRYPTION_SECRET`:
-- At least 32 characters long
-- Randomly generated (use `npm run generate-secret`)
-- Secure and never committed to version control
-- Consistent across server restarts
+**大切なこと**：`ENCRYPTION_SECRET` は次のように扱ってください。
+- 32 文字以上にする
+- ランダムに作る（`npm run generate-secret` を使う）
+- 安全に保管し、バージョン管理には絶対にコミットしない
+- 再起動しても変えない
 
-### Privacy-Safe Logging
+### プライバシーに配慮したログ
 
-The custom logger automatically redacts all sensitive information:
-- ✅ Operational events and errors logged
-- ❌ No tokens, credentials, or auth codes
-- ❌ No user IDs or personal information
-- ❌ No API request/response payloads with sensitive data
+独自のロガーが、機密情報を自動で伏せます。
+- ✅ 動作の記録とエラーは残す
+- ❌ トークン・認証情報・認可コードは残さない
+- ❌ ユーザー ID や個人情報は残さない
+- ❌ 機密データを含む API のリクエスト・レスポンスの中身は残さない
 
-You can review the logging implementation in `src/utils/logger.ts`.
+このフォークでは、許可リストで弾いた redirect_uri だけは、クエリを除いた origin とパスをログに出します。許可リストに足すべき URI を調べるためです。
 
-## Contributing
+ログの実装は `src/utils/logger.ts` で確認できます。
 
-This is a personal project, but contributions are welcome! Please:
+## コントリビュート
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Submit a pull request
+個人のプロジェクトですが、コントリビュートは歓迎します。次の手順でお願いします。
 
-## License
+1. リポジトリを fork する
+2. 機能用のブランチを作る
+3. 変更を入れる
+4. プルリクエストを送る
 
-MIT License - see [LICENSE](LICENSE) file for details.
+## ライセンス
 
-## Support
+MIT ライセンスです。詳しくは [LICENSE](LICENSE) を見てください。
 
-- **Issues**: Report bugs or request features on [GitHub Issues](https://github.com/akutishevsky/google-tasks-mcp/issues)
-- **Google Tasks API**: See [Google Tasks API Documentation](https://developers.google.com/workspace/tasks/reference/rest)
-- **MCP Protocol**: See [Model Context Protocol Documentation](https://modelcontextprotocol.io/)
+## サポート
 
-## Acknowledgments
+- **Issues**：バグ報告や機能の要望は、upstream の [GitHub Issues](https://github.com/akutishevsky/google-tasks-mcp/issues) へ
+- **Google Tasks API**：[Google Tasks API のドキュメント](https://developers.google.com/workspace/tasks/reference/rest)
+- **MCP プロトコル**：[Model Context Protocol のドキュメント](https://modelcontextprotocol.io/)
 
-Built with:
-- [Model Context Protocol](https://modelcontextprotocol.io/) by Anthropic
+## 謝辞
+
+使っているもの：
+- Anthropic の [Model Context Protocol](https://modelcontextprotocol.io/)
 - [Google Tasks API](https://developers.google.com/workspace/tasks)
-- [Hono](https://hono.dev/) web framework
-- [Deno Deploy](https://deno.com/deploy) for hosting
+- Web フレームワークの [Hono](https://hono.dev/)
+- ホスティングの [Deno Deploy](https://deno.com/deploy)
