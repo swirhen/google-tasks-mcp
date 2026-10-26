@@ -17,7 +17,7 @@ Environment=GOOGLE_REDIRECT_URI=https://swirhen.tv/google_tasks_mcp/callback
 Environment=ALLOWED_REDIRECT_URIS=https://claude.ai/api/mcp/auth_callback
 # 接続情報（暗号化済みトークン）を再起動後も残す
 Environment=KV_PATH=/home/swirhen/.local/share/google-tasks-mcp/kv.sqlite3
-ExecStart=/usr/bin/node /home/swirhen/google-tasks-mcp/build/serve.js
+ExecStart=/usr/local/bin/node /home/swirhen/google-tasks-mcp/build/serve.js
 Restart=on-failure
 RestartSec=5
 
