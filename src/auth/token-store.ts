@@ -77,6 +77,52 @@ class TokenStore {
     if (!this.kv) throw new Error("KV not initialized");
     await this.kv.delete(["tokens", mcpToken]);
   }
+
+  // MCP の refresh_token。使うたびに作り直す（ローテーション）ので、期限は最後の更新から数える
+  async storeRefreshToken(refreshToken: string, data: RefreshTokenData): Promise<void> {
+    if (!this.kv) throw new Error("KV not initialized");
+    const encryptedData: EncryptedRefreshTokenData = {
+      mcpToken: data.mcpToken,
+      clientId: data.clientId,
+      encryptedGoogleRefreshToken: encrypt(data.googleRefreshToken),
+    };
+    await this.kv.set(["refresh_tokens", refreshToken], encryptedData, { expireIn: REFRESH_TOKEN_TTL_MS });
+  }
+
+  async getRefreshToken(refreshToken: string): Promise<RefreshTokenData | null> {
+    if (!this.kv) throw new Error("KV not initialized");
+    const result = await this.kv.get<EncryptedRefreshTokenData>(["refresh_tokens", refreshToken]);
+
+    if (!result.value) {
+      return null;
+    }
+
+    return {
+      mcpToken: result.value.mcpToken,
+      clientId: result.value.clientId,
+      googleRefreshToken: decrypt(result.value.encryptedGoogleRefreshToken),
+    };
+  }
+
+  async deleteRefreshToken(refreshToken: string): Promise<void> {
+    if (!this.kv) throw new Error("KV not initialized");
+    await this.kv.delete(["refresh_tokens", refreshToken]);
+  }
+}
+
+export const REFRESH_TOKEN_TTL_MS = 180 * 24 * 60 * 60 * 1000; // 180 days
+
+export interface RefreshTokenData {
+  // この refresh_token と対になっているアクセストークン（更新時に古い方を消すため）
+  mcpToken: string;
+  clientId?: string;
+  googleRefreshToken: string;
+}
+
+interface EncryptedRefreshTokenData {
+  mcpToken: string;
+  clientId?: string;
+  encryptedGoogleRefreshToken: string;
 }
 
 export const tokenStore = new TokenStore();

@@ -1,6 +1,6 @@
 import { Buffer } from "node:buffer";
-import { Hono } from "hono";
-import { tokenStore } from "./token-store.ts";
+import { Hono, type Context } from "hono";
+import { tokenStore, type TokenData } from "./token-store.ts";
 import crypto from "node:crypto";
 import { getKv, type Kv } from "../utils/kv.ts";
 import { createLogger } from "../utils/logger.ts";
@@ -254,6 +254,10 @@ export function createOAuthRouter(config: OAuthConfig) {
     const codeVerifier = body.code_verifier as string;
     const redirectUri = body.redirect_uri as string;
 
+    if (grantType === "refresh_token") {
+      return await handleRefreshTokenGrant(c, body.refresh_token as string, body.client_id as string | undefined, config);
+    }
+
     if (grantType !== "authorization_code") {
       logger.warn("Token exchange failed: unsupported grant type");
       return c.json({ error: "unsupported_grant_type" }, 400);
@@ -307,25 +311,17 @@ export function createOAuthRouter(config: OAuthConfig) {
         return c.json({ error: "server_error", error_description: "Failed to exchange Google token" }, 500);
       }
 
-      const mcpToken = crypto.randomUUID();
+      await oauthStore.deleteAuthCode(code);
 
-      await tokenStore.storeTokens(mcpToken, {
+      const tokens = await issueMcpTokens({
         googleAccessToken: tokenData.access_token,
         googleRefreshToken: tokenData.refresh_token,
         expiresAt: Date.now() + tokenData.expires_in * 1000,
-      });
-
-      await oauthStore.deleteAuthCode(code);
+      }, authCodeData.clientId);
 
       logger.info("Token exchange completed successfully");
 
-      const MCP_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60;
-
-      return c.json({
-        access_token: mcpToken,
-        token_type: "Bearer",
-        expires_in: MCP_TOKEN_TTL_SECONDS,
-      });
+      return c.json(tokens);
     } catch (error) {
       logger.error("Token exchange error", { error: String(error) });
       return c.json({ error: "server_error", error_description: "Failed to exchange authorization code" }, 500);
@@ -334,6 +330,79 @@ export function createOAuthRouter(config: OAuthConfig) {
   );
 
   return oauth;
+}
+
+const MCP_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60;
+
+// アクセストークンと refresh_token を対で発行する
+async function issueMcpTokens(googleTokens: TokenData, clientId?: string) {
+  const mcpToken = crypto.randomUUID();
+  const refreshToken = crypto.randomUUID();
+
+  await tokenStore.storeTokens(mcpToken, googleTokens);
+  await tokenStore.storeRefreshToken(refreshToken, {
+    mcpToken,
+    clientId,
+    googleRefreshToken: googleTokens.googleRefreshToken,
+  });
+
+  return {
+    access_token: mcpToken,
+    token_type: "Bearer",
+    expires_in: MCP_TOKEN_TTL_SECONDS,
+    refresh_token: refreshToken,
+  };
+}
+
+async function handleRefreshTokenGrant(
+  c: Context,
+  refreshToken: string | undefined,
+  clientId: string | undefined,
+  config: OAuthConfig,
+) {
+  if (!refreshToken) {
+    logger.warn("Token refresh failed: missing refresh_token");
+    return c.json({ error: "invalid_request", error_description: "refresh_token is required" }, 400);
+  }
+
+  const stored = await tokenStore.getRefreshToken(refreshToken);
+  if (!stored) {
+    logger.warn("Token refresh failed: invalid or expired refresh_token");
+    return c.json({ error: "invalid_grant" }, 400);
+  }
+
+  if (clientId && stored.clientId && clientId !== stored.clientId) {
+    logger.warn("Token refresh failed: client_id mismatch");
+    return c.json({ error: "invalid_grant" }, 400);
+  }
+
+  logger.info("Processing MCP token refresh request");
+
+  // 古いアクセストークンが残っていれば、そちらの Google refresh token の方が新しい
+  const previous = await tokenStore.getTokens(stored.mcpToken);
+  const googleRefreshToken = previous?.googleRefreshToken || stored.googleRefreshToken;
+
+  try {
+    // Google 側で接続が取り消されていないかも、ここで確かめる
+    const refreshed = await refreshGoogleToken(googleRefreshToken, config);
+
+    // ローテーション：古い refresh_token とアクセストークンは使えなくする
+    await tokenStore.deleteRefreshToken(refreshToken);
+    await tokenStore.deleteToken(stored.mcpToken);
+
+    const tokens = await issueMcpTokens({
+      googleAccessToken: refreshed.accessToken,
+      googleRefreshToken: refreshed.refreshToken,
+      expiresAt: Date.now() + refreshed.expiresIn * 1000,
+    }, stored.clientId);
+
+    logger.info("MCP token refresh completed successfully");
+
+    return c.json(tokens);
+  } catch (error) {
+    logger.error("MCP token refresh error", { error: String(error) });
+    return c.json({ error: "invalid_grant", error_description: "Google authorization is no longer valid" }, 400);
+  }
 }
 
 export async function refreshGoogleToken(
