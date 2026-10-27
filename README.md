@@ -8,7 +8,7 @@ Google Tasks を Claude などの MCP 対応クライアントから使えるよ
 
 ## このフォークについて
 
-このリポジトリは [akutishevsky/google-tasks-mcp](https://github.com/akutishevsky/google-tasks-mcp) の fork です。upstream は Deno Deploy で動かす前提になっています。この fork は、**任意の Linux サーバーで Node と systemd を使って動かし、リバースプロキシ（Apache・nginx など）で公開する**ための変更を `selfhost` ブランチ（既定のブランチ）に入れています。
+このリポジトリは [akutishevsky/google-tasks-mcp](https://github.com/akutishevsky/google-tasks-mcp) の fork です。この fork は、**任意の Linux サーバーで Node と systemd を使って動かし、リバースプロキシ（Apache・nginx など）で公開する**ための変更を `selfhost` ブランチ（既定のブランチ）に入れています。upstream にあった Deno Deploy 向けのファイル（手順書・`deno.json` など）は削除しました。
 
 - **Node で起動できる**：`npm start`（`build/serve.js`）で、`HOST` と `PORT` で指定したアドレスで待ち受けます。
 - **KV を永続化する**：`KV_PATH` を指定すると、Deno KV を SQLite ファイルに保存します。再起動しても接続が消えません。
@@ -17,8 +17,6 @@ Google Tasks を Claude などの MCP 対応クライアントから使えるよ
 - **redirect_uri を検証する**：`ALLOWED_REDIRECT_URIS` とループバックアドレスだけを許可します。upstream は任意の URI を受け付けるので、罠のリンク経由で認可コードを第三者に渡してしまうおそれがあります。
 - **refresh_token に対応した**：クライアントがトークンを自動で更新できるので、定期的に接続し直す必要がありません。
 - **Google Analytics を外した**：upstream の作者の Google Analytics を、プライバシーポリシーのページから外しました。
-
-Deno Deploy で動かしたい場合は、upstream の手順を訳した [SETUP.md](SETUP.md) を参照してください。
 
 ## 使えるツール
 
@@ -47,7 +45,7 @@ Deno Deploy で動かしたい場合は、upstream の手順を訳した [SETUP.
 | ファイル | 内容 |
 | --- | --- |
 | `src/serve.ts` | Node 用の起動口（`npm start`） |
-| `src/index.ts` | アプリの組み立て。Deno Deploy ではここが入口になる |
+| `src/index.ts` | アプリの組み立て（KV を開き、設定を読み、Hono のアプリを作る） |
 | `src/server/` | Hono のアプリ、MCP のエンドポイント、Bearer 認証、回数制限 |
 | `src/auth/` | OAuth の認可サーバー（クライアント登録・認可・コールバック・トークン発行）とトークンの保存 |
 | `src/google/` | Google Tasks API のクライアント（Google のトークンの自動更新を含む） |

@@ -4,8 +4,28 @@
 
 - Google Tasks を MCP 対応クライアントから使えるようにする、リモート MCP サーバー。OAuth の認可サーバーも兼ねていて、Google の OAuth を中継する。[akutishevsky/google-tasks-mcp](https://github.com/akutishevsky/google-tasks-mcp) の fork で、`selfhost` ブランチ（既定のブランチ）で運用している。
 - 使い方・設定・導入手順は `README.md` を参照。README は任意のサーバーで構築する前提で書いている（URL は `https://example.com/google_tasks_mcp/`、配置先は `/opt/google-tasks-mcp` などの例）。うちの環境に固有の値は README に書かず、この AGENTS.md の「うちの環境」に書く。
-- コードの構成と規約は `CLAUDE.md`（upstream のもの）も参照。ただし、Deno Deploy を前提にした記述は、この fork の運用には当てはまらない。
-- `SETUP.md` は、upstream の Deno Deploy 向けの手順を訳したもの。この fork の運用では使わない。
+- upstream の Deno Deploy 向けのファイル（`SETUP.md`・`deno.json`・`deno.lock`・`.env.example`）は削除した。`CLAUDE.md` は、この AGENTS.md を見るように案内するだけのもの。Deno のものとして残っているのは、KV の保存に使う `@deno/kv`（npm 版。Node から SQLite を使う）だけ。
+
+## 構成
+
+```
+クライアント → リバースプロキシ → src/serve.ts（@hono/node-server）→ src/server/app.ts（Hono）
+  ├── セキュリティヘッダー、CORS
+  ├── OAuth：/register・/authorize・/callback・/token → src/auth/oauth.ts
+  ├── メタデータ：/.well-known/oauth-protected-resource[/mcp]・/.well-known/oauth-authorization-server
+  ├── MCP：/mcp（GET・POST）→ Bearer 認証（middleware.ts）→ mcp-endpoints.ts
+  │     └── POST ごとに McpServer を作り、ツールを登録して 1 回だけ応答する（状態を持たない）
+  │           └── src/tools/*.ts → src/google/api.ts → Google Tasks API
+  └── 静的ページ：/・/privacy-policy・/favicon.ico・/health
+```
+
+- `src/auth/oauth.ts`：Google の OAuth を中継する認可サーバー。`/authorize` で Google に飛ばし、`/callback` で Google の認可コードを預かって自前の認可コードを返す。`/token` で Google のトークンを受け取り、自前のアクセストークン（UUID）と refresh_token を発行する。
+- `src/auth/token-store.ts`：アクセストークン → 暗号化した Google のトークン（`["tokens", ...]`、30 日）と、refresh_token（`["refresh_tokens", ...]`、180 日）。
+- `src/google/api.ts`：Google Tasks の REST API の薄いラッパー。どの呼び出しも `makeGoogleRequest()` を通る。Google のアクセストークンの期限が 60 秒を切っていたら更新し、KV の期限も延ばす。
+- `src/tools/`：14 個のツール。`server.registerTool()` に Zod のスキーマを渡して登録し、結果は `addReadableTimestamps()` を通して JSON で返す。
+- `src/transport/mcp-transport.ts`：MCP の `Transport` を SSE で実装したもの。
+- `src/utils/encryption.ts`：AES-256-GCM（鍵は `ENCRYPTION_SECRET` から PBKDF2 で作る）。`src/utils/logger.ts`：トークンなどを伏せるロガー（`LOG_LEVEL`）。
+- 規約：TypeScript の import は拡張子 `.ts` で書く（`rewriteRelativeImportExtensions` で `.js` にコンパイルされる）。`process`・`Buffer` は `node:` から明示的に import する。
 
 ## upstream から変えたところ
 

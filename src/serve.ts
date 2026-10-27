@@ -1,4 +1,4 @@
-// Node 用の起動口（Deno Deploy ではなく自前のサーバーで動かすとき）
+// Node 用の起動口（npm start）
 import process from "node:process";
 import { serve } from "@hono/node-server";
 import app from "./index.ts";
